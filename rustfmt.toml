@@ -1,0 +1,4 @@
+match_block_trailing_comma = true
+match_arm_blocks = false
+binop_separator = "Back"
+reorder_imports = true

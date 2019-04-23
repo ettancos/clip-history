@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+
+
+# Echo clipboard items to Rofi and save the selection made by user
+if [[ -t 0 ]]; then
+  selected=$(echo gimme | socat UNIX-CONNECT:/tmp/clipboard.sock - | jq 'reverse | .[]' | fzf-tmux -d 15 --prompt='selection: ')
+else
+  selected=$(echo gimme | socat UNIX-CONNECT:/tmp/clipboard.sock - | jq 'reverse | .[]' | rofi -dmenu -i -lines 20 -p 'selection: ')
+fi
+selected="${selected%\"}"
+selected="${selected#\"}"
+
+
+if [ -n "${selected}" ]; then
+  wl-copy -t text/plain """$(printf "${selected}")"""
+fi
