@@ -1,5 +1,5 @@
 [package]
-name = "clipboard-history"
+name = "clip-history"
 version = "0.1.0"
 authors = ["Tamás Táncos <tamas.tancos@emarsys.com>"]
 edition = "2018"
