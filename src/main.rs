@@ -3,24 +3,19 @@
 extern crate wayland_client;
 #[macro_use]
 extern crate log;
+extern crate serde;
 extern crate smithay_client_toolkit as sctk;
 extern crate wayland_protocols;
 
-use pipe_channel;
 use os_pipe::PipeReader;
-use std::io::prelude::*;
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::thread;
 
 use std::{
     cell::{Cell, RefCell},
     collections::VecDeque,
-    env,
-    fs::{metadata, remove_file},
-    io::BufReader,
     io::Read,
     rc::Rc,
-    sync::{mpsc::{channel, Receiver}, Arc, Mutex, MutexGuard},
+    sync::{mpsc::{channel, Receiver}, Arc, Mutex},
     vec::Vec,
 };
 
@@ -31,12 +26,13 @@ use wayland_protocols::wlr::unstable::data_control::v1::client::zwlr_data_contro
 //use wayland_protocols::wlr::unstable::data_control::v1::client::zwlr_data_control_source_v1::ZwlrDataControlSourceV1;
 
 use sctk::Environment;
-use serde_json::{Result as SerdeResult, Value};
 
 mod seat_data;
 use crate::seat_data::SeatData;
 mod handlers;
 use crate::handlers::DataDeviceHandler;
+mod socket_handler;
+use crate::socket_handler::{from_path, handle_socket_connections};
 
 pub struct WlSeatHandler;
 
@@ -75,49 +71,6 @@ fn instantiate_data_control_manager(
     };
 }
 
-
-fn socket_consumer(history: Arc<Mutex<VecDeque<String>>>) {
-    let socket = "/tmp/clipboard.sock";
-    match metadata(socket) {
-        Err(_) => (),
-        Ok(_) => remove_file(socket).unwrap(),
-    }
-
-    let listener = UnixListener::bind(socket).unwrap();
-
-    for stream in listener.incoming() {
-        match stream {
-            Ok(socket) => {
-                let thread_history = history.clone();
-                let socket_ptr = Arc::new(socket);
-                let thread_socket = socket_ptr.clone();
-                thread::spawn(|| handle_socket(thread_socket, thread_history))
-            },
-            Err(_) => break,
-        };
-    }
-}
-
-fn handle_socket(stream: Arc<UnixStream>, history: Arc<Mutex<VecDeque<String>>>) {
-    let reader = BufReader::new(stream.as_ref());
-    for line in reader.lines().map(|l| l.unwrap()) {
-        debug!("Socket {}", line);
-        if line != "gimme" {
-            trace!("Request is bs");
-            continue;
-        }
-
-        let deque: MutexGuard<VecDeque<String>> = history.lock().unwrap();
-        let cloned: VecDeque<String> = deque.clone();
-        let serialized = serde_json::to_string(&cloned).unwrap();
-        trace!("Socket Serialized: {}", serialized);
-
-        stream.as_ref().write_all(serialized.as_bytes()).unwrap();
-        stream.as_ref().write_all("\n".as_bytes()).unwrap();
-        stream.as_ref().flush().unwrap();
-    }
-}
-
 fn content_fetcher(rx: Arc<Mutex<Receiver<PipeReader>>>, history: Arc<Mutex<VecDeque<String>>>) {
     for mut reader in rx.lock().unwrap().iter() {
         let mut buf = vec![];
@@ -140,11 +93,9 @@ fn content_fetcher(rx: Arc<Mutex<Receiver<PipeReader>>>, history: Arc<Mutex<VecD
         deque.append(&mut filtered);
     }
 }
-fn initialize() -> (wayland_client::EventQueue, Rc<RefCell<Vec<wl_seat::WlSeat>>>, wayland_client::GlobalManager) {
-    let (display, mut event_queue) = Display::connect_to_env()
-        .expect("Failed to connect to the Wayland server.");
-    let _env = Environment::from_display(&display, &mut event_queue).unwrap();
 
+fn init_globals_with_seats(display: wayland_client::Display, event_queue: &mut wayland_client::EventQueue)
+    -> Result<(GlobalManager, Rc<RefCell<Vec<wl_seat::WlSeat>>>), std::io::Error>  {
     let seats = Rc::new(RefCell::new(Vec::<wl_seat::WlSeat>::new()));
     let seats_2 = seats.clone();
 
@@ -161,16 +112,22 @@ fn initialize() -> (wayland_client::EventQueue, Rc<RefCell<Vec<wl_seat::WlSeat>>
             }
         ]),
     );
-    event_queue.sync_roundtrip().unwrap();
+    event_queue.sync_roundtrip()?;
+
     if seats.borrow().is_empty() {
         panic!("No seat");
     }
 
-    return (event_queue, seats, globals);
+    return Ok((globals, seats));
 }
 
 fn main() {
-    let (mut event_queue, seats, globals) = initialize();
+    let (display, mut event_queue) = Display::connect_to_env()
+        .expect("Failed to connect to the Wayland server.");
+    let _env = Environment::from_display(&display, &mut event_queue).unwrap();
+
+    let (globals, seats) = init_globals_with_seats(display, &mut event_queue).unwrap();
+
     let supports_primary = Rc::new(Cell::new(false));
 
     // Try v2 with falling back to v1 or panic if zwlr_data_control_manager_v1 is not supported by the compositor
@@ -180,8 +137,6 @@ fn main() {
 
     let mut threads = vec![];
     // Go through the seats and get their data devices.
-    //let (spipe, rpipe) = pipe_channel::channel();
-
     let (sender, receiver) = channel::<PipeReader>();
     let tx = Rc::new(RefCell::new(sender));
     let rx = Arc::new(Mutex::new(receiver));
@@ -209,8 +164,9 @@ fn main() {
         data_devices.push(device);
     }
 
+    let listener = from_path("/tmp/clipboard.sock").unwrap();
     thread::spawn(move || {
-        socket_consumer(history);
+        handle_socket_connections(listener.clone(), history).unwrap();
     });
 
     loop {
