@@ -56,7 +56,7 @@ fn handle_clipboard_requests(stream: Arc<UnixStream>, history: Arc<Mutex<VecDequ
       };
       debug!("Parsed request: {:?}", clip);
 
-      let response: VecDeque<String> = history.lock().unwrap().iter().map(|s| s.clone()).take(clip.count).collect();
+      let response: VecDeque<String> = history.lock().unwrap().iter().rev().take(clip.count).map(|s| s.clone()).collect();
       let serialized = match serde_json::to_string(&response) {
         Err(err) => {
           println!("Serialization failure: {}", err);
