@@ -6,7 +6,7 @@ After=graphical.target
 Environment=CLIPBOARD_HISTORY_SOCKET=/tmp/clipboard.sock
 Environment=RUST_BACKTRACE=full
 Environment=WAYLAND_DEBUG=0
-ExecStart=/home/ttancos/work/other/clipboard-history-rs/target/release/clipboard-history
+ExecStart=/home/ttancos/work/other/clip-history/target/release/clipboard-history
 ExecStop=/bin/kill -INT ${MAINPID}
 
 [Install]
